@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "generative-policies"
+version = "0.1.0"
+description = "Implementations of generative policies (flow policy, diffusion policy)"
+readme = { text = "Set up generative policies.", content-type = "text/plain" }
+requires-python = ">=3.8"
+dependencies = ["torch", "einops"]
+
+license = { text = "MIT" }
+authors = [
+  { name = "Unknown" }
+]
+
+
+[tool.setuptools]
+packages = { find = { include = ["generative_policies*"] } }
