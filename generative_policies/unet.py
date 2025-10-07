@@ -10,319 +10,130 @@ from .utils import SinusoidalPosEmb, GaussianFourierEmb
 class NoisePredictionNet(nn.Module, ABC):
 
     @abstractmethod
-    def forward(self, sample, timestep, global_cond):
+    def forward(self, x, c, t):
         raise NotImplementedError
 
 
-class Downsample1d(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.conv = nn.Conv1d(dim, dim, 3, 2, 1)
-
-    def forward(self, x):
-        return self.conv(x)
-
-
-class Upsample1d(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.conv = nn.ConvTranspose1d(dim, dim, 4, 2, 1)
-
-    def forward(self, x):
-        return self.conv(x)
-
-
-class Conv1dBlock(nn.Module):
-    """
-    Conv1d --> GroupNorm --> Mish
-    """
-
-    def __init__(self, inp_channels, out_channels, kernel_size, n_groups=8):
-        super().__init__()
-
-        self.block = nn.Sequential(
-            nn.Conv1d(
-                inp_channels,
-                out_channels,
-                kernel_size,
-                padding=kernel_size // 2,
-            ),
-            nn.GroupNorm(n_groups, out_channels),
-            nn.Mish(),
-        )
-
-    def forward(self, x):
-        return self.block(x)
-
-
-class ConditionalResidualBlock1D(nn.Module):
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        cond_dim,
-        kernel_size=3,
-        n_groups=8,
-    ):
-        super().__init__()
+class ConditionalUNet1D(nn.Module):
+    def __init__(self, in_channels, out_channels, diffusion_step_embed_dim, down_dims, cond_dim):
+        super(ConditionalUNet1D, self).__init__()
+        self.in_channels = in_channels
         self.out_channels = out_channels
-
-        self.blocks = nn.ModuleList(
-            [
-                Conv1dBlock(in_channels, out_channels, kernel_size, n_groups=n_groups),
-                Conv1dBlock(out_channels, out_channels, kernel_size, n_groups=n_groups),
-            ]
-        )
-
-        # FiLM modulation https://arxiv.org/abs/1709.07871
-        # predicts per-channel scale and bias
-        cond_channels = out_channels * 2
-        self.cond_encoder = nn.Sequential(
-            nn.Mish(),
-            nn.Linear(cond_dim, cond_channels),
-            Rearrange("batch t -> batch t 1"),
-        )
-
-        # make sure dimensions compatible
-        self.residual_conv = (
-            nn.Conv1d(in_channels, out_channels, 1)
-            if in_channels != out_channels
-            else nn.Identity()
-        )
-
-    def forward(self, x, cond):
-        """
-        x : [ batch_size x in_channels x horizon ]
-        cond : [ batch_size x cond_dim]
-
-        returns:
-        out : [ batch_size x out_channels x horizon ]
-        """
-        out = self.blocks[0](x)
-        embed = self.cond_encoder(cond)
-
-        # FiLM modulation
-        embed = embed.reshape(embed.shape[0], 2, self.out_channels, 1)
-        scale = embed[:, 0, ...]
-        bias = embed[:, 1, ...]
-        out = scale * out + bias
-
-        out = self.blocks[1](out)
-        out = out + self.residual_conv(x)
-        return out
-
-
-class UnetNoisePredictionNet(NoisePredictionNet):
-    def __init__(
-        self,
-        input_dim,
-        local_cond_dim=None,
-        global_cond_dim=None,
-        diffusion_step_embed_dim=256,
-        continuous_diffusion_step=False,
-        down_dims=[256, 512, 1024],
-        kernel_size=3,
-        n_groups=8,
-    ):
-        super().__init__()
-        all_dims = [input_dim] + list(down_dims)
-        start_dim = down_dims[0]
-
-        dsed = diffusion_step_embed_dim
-        diffusion_step_encoder = nn.Sequential(
-            (
-                GaussianFourierEmb(dsed)
-                if continuous_diffusion_step
-                else SinusoidalPosEmb(dsed)
-            ),
-            nn.Linear(dsed, dsed * 4),
-            nn.Mish(),
-            nn.Linear(dsed * 4, dsed),
-        )
-        cond_dim = dsed
-        if global_cond_dim is not None:
-            cond_dim += global_cond_dim
-
-        in_out = list(zip(all_dims[:-1], all_dims[1:]))
-
-        local_cond_encoder = None
-        if local_cond_dim is not None:
-            _, dim_out = in_out[0]
-            dim_in = local_cond_dim
-            local_cond_encoder = nn.ModuleList(
-                [
-                    # down encoder
-                    ConditionalResidualBlock1D(
-                        dim_in,
-                        dim_out,
-                        cond_dim=cond_dim,
-                        kernel_size=kernel_size,
-                        n_groups=n_groups,
-                    ),
-                    # up encoder
-                    ConditionalResidualBlock1D(
-                        dim_in,
-                        dim_out,
-                        cond_dim=cond_dim,
-                        kernel_size=kernel_size,
-                        n_groups=n_groups,
-                    ),
-                ]
-            )
-
-        mid_dim = all_dims[-1]
-        self.mid_modules = nn.ModuleList(
-            [
-                ConditionalResidualBlock1D(
-                    mid_dim,
-                    mid_dim,
-                    cond_dim=cond_dim,
-                    kernel_size=kernel_size,
-                    n_groups=n_groups,
-                ),
-                ConditionalResidualBlock1D(
-                    mid_dim,
-                    mid_dim,
-                    cond_dim=cond_dim,
-                    kernel_size=kernel_size,
-                    n_groups=n_groups,
-                ),
-            ]
-        )
-
-        down_modules = nn.ModuleList([])
-        for ind, (dim_in, dim_out) in enumerate(in_out):
-            is_last = ind >= (len(in_out) - 1)
-            down_modules.append(
-                nn.ModuleList(
-                    [
-                        ConditionalResidualBlock1D(
-                            dim_in,
-                            dim_out,
-                            cond_dim=cond_dim,
-                            kernel_size=kernel_size,
-                            n_groups=n_groups,
-                        ),
-                        ConditionalResidualBlock1D(
-                            dim_out,
-                            dim_out,
-                            cond_dim=cond_dim,
-                            kernel_size=kernel_size,
-                            n_groups=n_groups,
-                        ),
-                        (Downsample1d(dim_out) if not is_last else nn.Identity()),
-                    ]
-                )
-            )
-
-        up_modules = nn.ModuleList([])
-        for ind, (dim_in, dim_out) in enumerate(reversed(in_out[1:])):
-            is_last = ind >= (len(in_out) - 1)
-            up_modules.append(
-                nn.ModuleList(
-                    [
-                        ConditionalResidualBlock1D(
-                            dim_out * 2,
-                            dim_in,
-                            cond_dim=cond_dim,
-                            kernel_size=kernel_size,
-                            n_groups=n_groups,
-                        ),
-                        ConditionalResidualBlock1D(
-                            dim_in,
-                            dim_in,
-                            cond_dim=cond_dim,
-                            kernel_size=kernel_size,
-                            n_groups=n_groups,
-                        ),
-                        Upsample1d(dim_in) if not is_last else nn.Identity(),
-                    ]
-                )
-            )
-
-        final_conv = nn.Sequential(
-            Conv1dBlock(start_dim, start_dim, kernel_size=kernel_size),
-            nn.Conv1d(start_dim, input_dim, 1),
-        )
-
-        self.diffusion_step_encoder = diffusion_step_encoder
-        self.local_cond_encoder = local_cond_encoder
-        self.up_modules = up_modules
-        self.down_modules = down_modules
-        self.final_conv = final_conv
-        self.input_dim = input_dim
-
-    def forward(
-        self,
-        sample: torch.Tensor,
-        timestep: Union[torch.Tensor, float, int],
-        local_cond=None,
-        global_cond=None,
-    ):
-        """
-        x: (B,T,input_dim)
-        timestep: (B,) or int, diffusion step
-        local_cond: (B,T,local_cond_dim)
-        global_cond: (B,global_cond_dim)
-        output: (B,T,input_dim)
-        """
-        sample = einops.rearrange(sample, "b h t -> b t h")
-
-        # 1. time
-        timesteps = timestep
-        if not torch.is_tensor(timesteps):
-            # TODO: this requires sync between CPU and GPU. So try to pass
-            # timesteps as tensors if you can
-            timesteps = torch.tensor(
-                [timesteps], dtype=torch.long, device=sample.device
-            )
-        elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
-            timesteps = timesteps[None].to(sample.device)
-        # broadcast to batch dimension in a way that's compatible with
-        # ONNX/Core ML
-        timesteps = timesteps.expand(sample.shape[0])
-
-        global_feature = self.diffusion_step_encoder(timesteps)
-
+        self.diffusion_step_embed_dim = diffusion_step_embed_dim
+        self.down_dims = down_dims
+        self.cond_dim = cond_dim
         
-        if global_cond is not None:
-            global_feature = torch.cat([global_feature, global_cond], axis=-1)
+        # Time embedding (Gaussian Fourier + MLP)
+        self.time_embed = nn.Sequential(
+            GaussianFourierEmb(diffusion_step_embed_dim),
+            nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim * 4),
+            nn.Mish(),
+            nn.Linear(diffusion_step_embed_dim * 4, diffusion_step_embed_dim)
+        )
+        
+        # Condition embedding
+        self.cond_embed = nn.Sequential(
+            nn.Linear(cond_dim, diffusion_step_embed_dim),
+            nn.SiLU(),
+            nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim)
+        )
+        
+        # Condition projection layers for each encoder/decoder layer
+        self.cond_projections = nn.ModuleList()
+        for dim in down_dims:
+            self.cond_projections.append(
+                nn.Linear(diffusion_step_embed_dim, dim)
+            )
+        
+        # Input projection
+        self.input_proj = nn.Linear(in_channels, down_dims[0])
+        
+        # Encoder layers
+        self.encoder_layers = nn.ModuleList()
+        for i in range(len(down_dims)):
+            if i == 0:
+                # First layer: input_proj output + condition embedding
+                in_ch = down_dims[i] + down_dims[i]  # h + cond_emb_proj
+            else:
+                # Subsequent layers: previous layer output + condition embedding
+                in_ch = down_dims[i-1] + down_dims[i]  # h + cond_emb_proj
+            out_ch = down_dims[i]
+            self.encoder_layers.append(
+                nn.Sequential(
+                    nn.Linear(in_ch, out_ch),
+                    nn.SiLU(),
+                    nn.Linear(out_ch, out_ch)
+                )
+            )
+        
+        # Decoder layers (reverse order of encoder)
+        self.decoder_layers = nn.ModuleList()
+        for i in range(len(down_dims)):
+            # Decoder works in reverse order: [512, 256, 128] for down_dims=[128, 256, 512]
+            decoder_idx = len(down_dims) - 1 - i  # Reverse index
+            
+            if i == 0:
+                # First decoder layer: last encoder output + condition embedding
+                in_ch = down_dims[-1] + down_dims[decoder_idx]  # h + cond_emb_proj
+            else:
+                # Subsequent decoder layers: previous decoder output + condition embedding
+                prev_decoder_idx = len(down_dims) - i  # Previous decoder output dimension
+                in_ch = down_dims[prev_decoder_idx] + down_dims[decoder_idx]  # h + cond_emb_proj
+            out_ch = down_dims[decoder_idx]
+            self.decoder_layers.append(
+                nn.Sequential(
+                    nn.Linear(in_ch, out_ch),
+                    nn.SiLU(),
+                    nn.Linear(out_ch, out_ch)
+                )
+            )
+        
+        # Output projection
+        self.output_proj = nn.Linear(down_dims[0], out_channels)
 
-        # encode local features
-        h_local = list()
-        if local_cond is not None:
-            local_cond = einops.rearrange(local_cond, "b h t -> b t h")
-            resnet, resnet2 = self.local_cond_encoder
-            x = resnet(local_cond, global_feature)
-            h_local.append(x)
-            x = resnet2(local_cond, global_feature)
-            h_local.append(x)
+    def forward(self, x, c, t):
+        """
+        x: (batch_size, flow_dim)
+        c: (batch_size, cond_dim)
+        t: (batch_size, 1) - time steps
+        return: (batch_size, flow_dim)
+        """
 
-        x = sample
-        h = []
-        for idx, (resnet, resnet2, downsample) in enumerate(self.down_modules):
-            x = resnet(x, global_feature)
-            if idx == 0 and len(h_local) > 0:
-                x = x + h_local[0]
-            x = resnet2(x, global_feature)
-            h.append(x)
-            x = downsample(x)
-
-        for mid_module in self.mid_modules:
-            x = mid_module(x, global_feature)
-
-
-
-        for idx, (resnet, resnet2, upsample) in enumerate(self.up_modules):
-            hpop = h.pop()
-            x = torch.cat((x,hpop), dim=1)
-            x = resnet(x, global_feature)
-            if idx == len(self.up_modules) and len(h_local) > 0:
-                x = x + h_local[1]
-            x = resnet2(x, global_feature)
-            x = upsample(x)
-
-        x = self.final_conv(x)
-
-        x = einops.rearrange(x, "b t h -> b h t")
-        return x
+        batch_size = x.shape[0]
+        
+        # Embed time and condition
+        # Accept t as (B,1) or (B,) floats
+        t_inp = t.squeeze(-1) if t.dim() == 2 and t.size(-1) == 1 else t
+        t_emb = self.time_embed(t_inp)  # (batch_size, diffusion_step_embed_dim)
+        c_emb = self.cond_embed(c)  # (batch_size, diffusion_step_embed_dim)
+        
+        # Combine time and condition embeddings
+        cond_emb = t_emb + c_emb  # (batch_size, diffusion_step_embed_dim)
+        
+        # Input projection
+        h = self.input_proj(x)  # (batch_size, down_dims[0])
+        
+        # Encoder
+        encoder_outputs = []
+        for i, layer in enumerate(self.encoder_layers):
+            # Project condition embedding to match current layer dimension
+            cond_emb_proj = self.cond_projections[i](cond_emb)
+            h = layer(torch.cat([h, cond_emb_proj], dim=-1))
+            encoder_outputs.append(h)
+        
+        # Decoder
+        for i, layer in enumerate(self.decoder_layers):
+            # Decoder works in reverse order, so we need to use reverse index for condition projection
+            decoder_idx = len(self.down_dims) - 1 - i
+            # Project condition embedding to match current layer dimension
+            cond_emb_proj = self.cond_projections[decoder_idx](cond_emb)
+            h = layer(torch.cat([h, cond_emb_proj], dim=-1))
+        
+        # Output projection
+        output = self.output_proj(h)
+        
+        return output
+    
+    def to(self, device):
+        super().to(device)
+        return self

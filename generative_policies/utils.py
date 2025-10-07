@@ -36,6 +36,10 @@ class GaussianFourierEmb(nn.Module):
     def forward(self, x):
         x_proj = x[:, None] * self.W[None, :] * 2 * np.pi
         return torch.cat([x_proj.sin(), x_proj.cos()], dim=-1)
+    
+    def to(self, device):
+        super().to(device)
+        return self
 
 
 class PatchEmbed2D(nn.Module):
