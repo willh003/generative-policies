@@ -4,10 +4,11 @@ from typing import Union, Optional
 
 from generative_policies.models.obs_encoder import IdentityEncoder, IdentityTwoInputEncoder
 
+from generative_policies.inverse_dynamics.interface import InverseDynamicsInterface 
 
-class MlpInverseDynamics(nn.Module):
+class MlpInverseDynamics(InverseDynamicsInterface):
     def __init__(self, action_dim, obs_dim, net_arch=[32, 32], device='cuda'):
-        super().__init__()
+        super(MlpInverseDynamics, self).__init__()
         self.action_dim = action_dim
         self.obs_dim = obs_dim
         self.net_arch = net_arch

@@ -6,7 +6,9 @@ from generative_policies.models.flow_model import ConditionalFlowModel
 from generative_policies.models.obs_encoder import IdentityEncoder, IdentityTwoInputEncoder
 from generative_policies.models.prior import GaussianPrior
 
-class FlowInverseDynamics(nn.Module):
+from generative_policies.inverse_dynamics.interface import InverseDynamicsInterface 
+
+class FlowInverseDynamics(InverseDynamicsInterface):
     """
     Model p(a | s, s') by flowing from N(0,1) to a, conditioned on s,s'.
     """
@@ -18,7 +20,7 @@ class FlowInverseDynamics(nn.Module):
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
                 device='cuda'):
-        super().__init__()
+        super(FlowInverseDynamics, self).__init__()
         self.action_dim = action_dim
         self.num_inference_steps = num_inference_steps
         self.cond_encoder = IdentityTwoInputEncoder(obs_dim, obs_dim) # encode s,s'

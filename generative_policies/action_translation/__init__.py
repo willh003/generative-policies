@@ -1,2 +1,4 @@
-from .action_translator import ActionTranslatorInterface, FlowActionPriorTranslator, FlowActionConditionedTranslator, FlowActionPriorConditionedTranslator
-from .translator_policy import ActionTranslatorPolicy, PolicyInterface
+from .flow_action_translator import FlowActionPriorTranslator, FlowActionConditionedTranslator, FlowActionPriorConditionedTranslator
+from .mlp_action_translator import MlpActionTranslator
+from .interface import ActionTranslatorInterface, PolicyInterface
+from .translator_policy import ActionTranslatorPolicy

@@ -34,7 +34,7 @@ pip install -e .
 A conditional flow model that learns to transform from a source distribution to a target distribution.
 
 ```python
-from generative_policies import ConditionalFlowModel
+from generative_policies.models import ConditionalFlowModel
 
 model = ConditionalFlowModel(
     target_dim=action_dim,
@@ -63,7 +63,7 @@ A specialized flow model with bridge noise for more stable training. In practice
 MLP-based inverse dynamics model for learning action distributions from state transitions.
 
 ```python
-from generative_policies import MlpInverseDynamics
+from generative_policies.inverse_dynamics import MlpInverseDynamics
 
 model = MlpInverseDynamics(
     action_dim=7,
@@ -87,7 +87,7 @@ Flow-based inverse dynamics model using conditional flow models.
 MLP-based action translator for converting actions between domains.
 
 ```python
-from generative_policies import MlpActionTranslator
+from generative_policies.action_translation import MlpActionTranslator
 
 translator = MlpActionTranslator(
     action_dim=7,
@@ -104,8 +104,8 @@ translated_actions = translator.predict(obs, source_actions)
 
 #### Flow-based Translators
 - `FlowActionPriorTranslator`: Uses source action as prior
-- `FlowActionConditionedTranslator`: Conditions on source action
-- `FlowActionPriorConditionedTranslator`: Combines both approaches
+- `FlowActionConditionedTranslator`: Conditions on source action, uses gaussian as prior
+- `FlowActionPriorConditionedTranslator`: Uses source action as prior AND for explicit conditioning
 
 ### Observation Encoders
 
@@ -132,7 +132,7 @@ Simple Gaussian prior distribution for flow models.
 
 ```python
 import torch
-from generative_policies import ConditionalFlowModel
+from generative_policies.models import ConditionalFlowModel
 
 # Initialize model
 model = ConditionalFlowModel(target_dim=7, cond_dim=64)
@@ -151,7 +151,7 @@ for batch in dataloader:
 ### Action Translation
 
 ```python
-from generative_policies import MlpActionTranslator
+from generative_policies.action_translation import MlpActionTranslator
 
 # Train translator
 translator = MlpActionTranslator(action_dim=7, obs_dim=64)

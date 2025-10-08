@@ -3,26 +3,7 @@ import torch.nn as nn
 from typing import Union, Optional
 import numpy as np
 
-from generative_policies.action_translation.action_translator import ActionTranslatorInterface
-
-
-class PolicyInterface(nn.Module):
-    """
-    Interface for a policy used in the ActionTranslatorPolicy
-
-    SB3 policies satisfy this format
-    """
-    def __init__(self):
-        super(PolicyInterface, self).__init__()
-        
-    def predict(self, obs, state, episode_start: Optional[np.ndarray] = None, deterministic: bool = True):
-        """
-        Predict an action given the observation, state, and episode start
-        If deterministic is True, the action is deterministic. Otherwise, the action is stochastic
-        - ex. for PPO, this is the mean action or the action sampled from the gaussian defined by the policy
-        """
-        raise NotImplementedError("Subclasses must implement predict method")
-
+from generative_policies.action_translation.interface import ActionTranslatorInterface, PolicyInterface
 
 class ActionTranslatorPolicy:
     """
