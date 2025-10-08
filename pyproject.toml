@@ -5,10 +5,10 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "generative-policies"
 version = "0.1.0"
-description = "Implementations of generative policies (flow policy, diffusion policy)"
+description = "Lightweight implementations of generative models for robot learning applications"
 readme = { text = "Set up generative policies.", content-type = "text/plain" }
 requires-python = ">=3.8"
-dependencies = ["torch", "einops"]
+dependencies = ["torch", "einops", "numpy"]
 
 license = { text = "MIT" }
 authors = [

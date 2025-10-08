@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 import numpy as np
-from .utils import inputs_to_torch
+from generative_policies.utils import inputs_to_torch
 
 
 class IdentityEncoder(nn.Module):

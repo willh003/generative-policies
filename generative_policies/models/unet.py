@@ -5,14 +5,7 @@ import torch
 import torch.nn as nn
 from einops.layers.torch import Rearrange
 from abc import ABC, abstractmethod
-from .utils import SinusoidalPosEmb, GaussianFourierEmb
-
-class NoisePredictionNet(nn.Module, ABC):
-
-    @abstractmethod
-    def forward(self, x, c, t):
-        raise NotImplementedError
-
+from generative_policies.utils import SinusoidalPosEmb, GaussianFourierEmb
 
 class ConditionalUNet1D(nn.Module):
     def __init__(self, in_channels, out_channels, diffusion_step_embed_dim, down_dims, cond_dim):
