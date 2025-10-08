@@ -1,7 +1,4 @@
 from .flow_model import ConditionalFlowModel
 from .unet import ConditionalUNet1D
-from .obs_encoder import LowDimObservationEncoder
-
-__all__ = ["ConditionalFlowModel", "ConditionalUNet1D", "LowDimObservationEncoder"]
-
+from .obs_encoder import DictObservationEncoder, IdentityObservationEncoder, IdentityObservationActionEncoder
 

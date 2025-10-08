@@ -5,6 +5,10 @@ import torch
 import torch.nn as nn
 from einops import rearrange
 
+def inputs_to_torch(x, device):
+    if type(x) == np.ndarray or type(x) == list:
+        x = torch.FloatTensor(x)
+    return x.to(device)
 
 class SinusoidalPosEmb(nn.Module):
     def __init__(self, dim):

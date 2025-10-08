@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from .unet import ConditionalUNet1D
-
+from .prior import GaussianPrior
 
 class ConditionalFlowModel(nn.Module):
     def __init__(self, target_dim, cond_dim=0, diffusion_step_embed_dim=32, down_dims=[32, 64, 128], source_sampler=None):
@@ -22,7 +22,7 @@ class ConditionalFlowModel(nn.Module):
         
         # Source distribution sampler function. Defaults to gaussian
         if source_sampler is None:
-            self.source_sampler = lambda batch_size, device: torch.randn(batch_size, target_dim, device=device)
+            self.source_sampler = GaussianPrior(target_dim)
         else:
             self.source_sampler = source_sampler
 
