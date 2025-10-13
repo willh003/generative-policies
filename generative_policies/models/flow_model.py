@@ -9,8 +9,7 @@ class ConditionalFlowModel(nn.Module):
         super(ConditionalFlowModel, self).__init__()
         self.target_dim = target_dim
         self.cond_dim = cond_dim
-        # Default source sampler for when explicit prior samples/sampler are not provided per-call
-        
+
         # Initialize the conditional UNet
         self.unet = ConditionalUNet1D(
             in_channels=target_dim,
@@ -223,3 +222,181 @@ class LatentBridgeModel(ConditionalFlowModel):
             
             return x
 
+
+
+
+class EquilibriumMatchingModel(ConditionalFlowModel):
+    def __init__(self, target_dim, cond_dim=0, 
+            diffusion_step_embed_dim=16, down_dims=[128, 256, 512], 
+            source_sampler=None, 
+            lambda_=4.0, 
+            gamma_type='truncated',
+            mu=0.35,
+            eta=0.003,
+            g = .0001,
+            objective_type='implicit',
+            energy_type='dot',
+            grad_type='nag'
+        ):
+        super(EquilibriumMatchingModel, self).__init__(
+            target_dim=target_dim,
+            cond_dim=cond_dim,
+            diffusion_step_embed_dim=diffusion_step_embed_dim,
+            down_dims=down_dims,
+            source_sampler=source_sampler
+        )
+        assert gamma_type in ['linear', 'truncated'], "gamma_type must be either 'linear' or 'truncated'"
+        self.gamma_type = gamma_type
+        self.lambda_ = lambda_
+        self.g = g
+        self.mu = mu
+        self.eta = eta
+        
+        self.num_gamma = 100
+        self.gamma_values = torch.linspace(0.0, 1.0, self.num_gamma)
+
+        self.objective_type = objective_type
+        self.energy_type = energy_type
+        self.sample_fn = self.sample_gd if grad_type == 'gd' else self.sample_nag
+
+        self.objective = self.implicit_objective if self.objective_type == 'implicit' else self.explicit_objective
+
+    def forward(self, target, condition=None, prior_samples=None, prior_sampler=None):
+        """
+        The loss function takes as input model f, image x, and gradient
+        magnitude function c, and returns the EqM loss.
+        """
+        batch_size = target.shape[0]
+        device = target.device
+        self.gamma_values = self.gamma_values.to(target.device)
+        
+        # Sample epsilon from source distribution (explicit prior overrides default sampler)
+        eps = self.sample_source(
+            batch_size=batch_size,
+            device=device,
+            prior_samples=prior_samples,
+            prior_sampler=prior_sampler,
+        )  # (batch_size, target_dim)
+        
+        # Prepare condition for network: ignore provided condition if cond_dim == 0
+        if self.cond_dim == 0:
+            cond_input = torch.zeros(batch_size, 0, device=device)
+        else:
+            if condition is not None:
+                cond_input = condition
+            else:
+                cond_input = torch.zeros(batch_size, self.cond_dim, device=device)
+
+        x = target.requires_grad_(True)
+
+        gamma = torch.rand(batch_size, 1, device=device)
+        xg = (1 - gamma) * eps + gamma * x  # (batch_size, target_dim)
+        c_gamma = self.c_trunc(gamma) if self.gamma_type == 'truncated' else self.c_linear(gamma)
+        t_mask = torch.zeros_like(gamma) # paper masks 
+        pred = self.unet(xg, cond_input, t_mask)  # (batch_size, target_dim)
+        loss = self.objective(x, pred, eps, c_gamma)
+        batch_loss = loss.mean()        
+
+        return batch_loss
+
+    def implicit_objective(self, x, pred, eps, c_gamma):
+        objective = (pred - (eps - x) * c_gamma)**2
+        return objective
+    
+    def explicit_objective(self, x, pred, eps, c_gamma, energy_type='dot'):
+        
+        def dot_product(x, pred):
+            # Element-wise dot product for each sample in the batch
+            return torch.sum(x * pred, dim=1, keepdim=True)
+        
+        def squared_l2_norm(x, pred):
+            return torch.sum(-.5*torch.linalg.vector_norm(pred, dim=1, keepdim=True)**2)
+
+        energy_function = dot_product if self.energy_type == 'dot' else squared_l2_norm
+        g_x = energy_function(x, pred)
+
+        grad_energy = torch.autograd.grad(g_x.sum(), x, retain_graph=True)[0]
+        objective = (grad_energy - (eps - x) * c_gamma) ** 2
+        return objective
+        
+
+    def c_linear(self, gamma):
+        c = 1 - gamma
+        return self.lambda_ * c
+
+    def c_trunc(self,gamma, a=.8):
+        c = torch.where(gamma <= a, 1, (1 - gamma) / (1 - a))
+        return self.lambda_ * c
+
+    def predict(self, batch_size, condition=None, prior_samples=None, prior_sampler=None, num_steps=1000, device='cpu', eta=None, mu=None, grad_type = None, g=None):
+
+        """
+        The sampling function takes in model f, initial state st, step size η,
+        NAG factor µ, and threshold g, and returns the sample.
+        def generate(f, st, eta, mu, g):
+        x = st, x_last = st, grad = f(st)
+        while norm(grad) < g:
+        x_last = x
+        x = x - eta*grad
+        grad = f(x + mu*(x-x_last))
+        return x
+        """
+
+        if eta is None:
+            eta = self.eta
+        if mu is None:
+            mu = self.mu
+        if g is None:
+            g = self.g
+        if grad_type is not None:
+            self.sample_fn = self.sample_nag if grad_type == 'nag' else self.sample_gd
+
+        self.eval()
+        with torch.no_grad():
+            # Start from source distribution (explicit prior overrides default sampler)
+            x = self.sample_source(
+                batch_size=batch_size,
+                device=device,
+                prior_samples=prior_samples,
+                prior_sampler=prior_sampler,
+            )  # (batch_size, target_dim)
+
+            x_last = x.clone()
+            
+            # Prepare condition for network: ignore provided condition if cond_dim == 0
+            if self.cond_dim == 0:
+                cond_input = torch.zeros(batch_size, 0, device=device)
+            else:
+                if condition is not None:
+                    cond_input = condition
+                else:
+                    cond_input = torch.zeros(batch_size, self.cond_dim, device=device)
+            
+            x = self.sample_fn(x, cond_input, num_steps, device)
+
+        return x
+
+    def sample_nag(self, x, cond_input, num_steps, device):
+        batch_size = x.shape[0]
+        t_mask = torch.zeros(batch_size, 1, device=device)
+        grad = self.unet(x, cond_input, t_mask)  # (batch_size, target_dim)
+        for i in range(num_steps):
+            grad_norm = torch.norm(grad, dim=1, keepdim=True) 
+            if torch.all(grad_norm < self.g):
+                print(f"Converged at step {i}")
+                break
+
+            x_last = x.clone()
+            x = x - self.eta * grad
+            nag_point = x + self.mu * (x - x_last)
+            grad = self.unet(nag_point, cond_input, t_mask)  # (batch_size, target_dim)
+        return x
+
+    def sample_gd(self, x, cond_input, num_steps, device):
+        batch_size = x.shape[0]
+        t_mask = torch.zeros(batch_size, 1, device=device)
+        grad = self.unet(x, cond_input, t_mask)  # (batch_size, target_dim)
+        for i in range(num_steps):
+            x = x - self.eta * grad
+            grad = self.unet(x, cond_input, t_mask)  # (batch_size, target_dim)
+        return x

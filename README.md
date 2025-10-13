@@ -1,6 +1,6 @@
 # Generative Policies
 
-A lightweight Python library implementing generative models for robot learning applications, focusing on flow-based models, inverse dynamics, and action translation.
+A lightweight Python library implementing generative models for robot learning applications. Provides simple interfaces for flow-based models, as well as model explicitly designed for inverse dynamics and action generation (policies).
 
 ## Overview
 
@@ -14,17 +14,25 @@ This library provides implementations of conditional flow models and related com
 ## Installation
 
 ```bash
-conda create -n genpol
+conda create -n generative_policies
+conda activate generative_policies
 conda install pip
 pip install -e .
 ```
 
 ### Dependencies
 
-- Python >= 3.8
-- PyTorch
+- python >= 3.8
+- torch
 - einops
 - numpy
+
+## Example
+
+Run flow matching on bimodal data (see experiment.py for other experiments)
+```
+python -m generative_policies.models.experiment
+```
 
 ## Core Components
 
