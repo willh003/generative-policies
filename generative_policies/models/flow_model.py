@@ -52,11 +52,15 @@ class ConditionalFlowModel(nn.Module):
         - Train the flow model to predict the velocity field
         """
         batch_size = target.shape[0]
+        if self.cond_dim == 0:
+            cond_input = torch.zeros(batch_size, 0, device=device)
+        else:
+            if condition is not None:
+                cond_input = condition
+            else:
+                cond_input = torch.zeros(batch_size, self.cond_dim, device=device)  # (batch_size, cond_dim)
         
-        # Sample random time steps
         t = torch.rand(batch_size, 1, device=device)  # (batch_size, 1)
-        
-        # Sample starting sources (explicit prior overrides default sampler)
         source = self.sample_source(
             batch_size=batch_size,
             device=device,
@@ -64,27 +68,9 @@ class ConditionalFlowModel(nn.Module):
             prior_sampler=prior_sampler,
         )  # (batch_size, target_dim)
         
-        # Linear interpolation between source and target
         x_t = (1 - t) * source + t * target  # (batch_size, target_dim)
-        
-        # True velocity field (target - source)
-        true_velocity = target - source  # (batch_size, target_dim)
-        
-        # Prepare condition for network: ignore provided condition if cond_dim == 0
-        if self.cond_dim == 0:
-            cond_input = torch.zeros(batch_size, 0, device=device)
-        else:
-            if condition is not None:
-                # Ensure floating dtype for linear layers
-                cond_input = condition
-            else:
-                cond_input = torch.zeros(batch_size, self.cond_dim, device=device)  # (batch_size, cond_dim)
-        
-        # Predict velocity field
-
         pred_velocity = self.unet(x_t, cond_input, t)  # (batch_size, target_dim)
-        
-        # Compute loss (MSE between predicted and true velocity)
+        true_velocity = target - source  # (batch_size, target_dim)
         loss = F.mse_loss(pred_velocity, true_velocity)
         
         return loss
@@ -104,6 +90,14 @@ class ConditionalFlowModel(nn.Module):
         self.eval()
         with torch.no_grad():
             # Start from source distribution (explicit prior overrides default sampler)
+            if self.cond_dim == 0:
+                    cond_input = torch.zeros(batch_size, 0, device=device)
+            else:
+                if condition is not None:
+                    cond_input = condition
+                else:
+                    cond_input = torch.zeros(batch_size, self.cond_dim, device=device)  # (batch_size, cond_dim)
+            
             x = self.sample_source(
                 batch_size=batch_size,
                 device=device,
@@ -111,26 +105,10 @@ class ConditionalFlowModel(nn.Module):
                 prior_sampler=prior_sampler,
             )  # (batch_size, target_dim)
             
-            # Time steps for integration
             dt = 1.0 / num_steps
-            
             for i in range(num_steps):
                 t = torch.full((batch_size, 1), i * dt, device=device)  # (batch_size, 1)
-                
-                # Prepare condition for network: ignore provided condition if cond_dim == 0
-                if self.cond_dim == 0:
-                    cond_input = torch.zeros(batch_size, 0, device=device)
-                else:
-                    if condition is not None:
-                        # Ensure floating dtype for linear layers
-                        cond_input = condition
-                    else:
-                        cond_input = torch.zeros(batch_size, self.cond_dim, device=device)  # (batch_size, cond_dim)
-                
-                # Predict velocity
                 velocity = self.unet(x, cond_input, t)  # (batch_size, target_dim)
-                
-                # Euler integration step
                 x = x + velocity * dt
             
             return x

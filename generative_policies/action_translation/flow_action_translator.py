@@ -155,3 +155,118 @@ class FlowActionPriorConditionedTranslator(FlowActionConditionedTranslator):
                                          num_steps=self.num_inference_steps, 
                                          device=self.device)
         return sample.cpu().numpy()
+
+class FlowBC(ActionTranslatorInterface):
+    """
+    BC policy that learns p(a | o) by flowing from N(0,1) to a, conditioned on o
+    I.e., no action conditioning or prior
+    """
+    def __init__(self,
+                action_dim, 
+                obs_dim,
+                diffusion_step_embed_dim=16,
+                down_dims=[16, 32, 64],
+                num_inference_steps=100,
+                device='cuda'):
+        super(FlowBC, self).__init__()
+        self.action_dim = action_dim
+        self.obs_dim = obs_dim
+        self.num_inference_steps = num_inference_steps
+
+        self.cond_encoder = IdentityEncoder(obs_dim, device=device)
+        self.action_encoder = IdentityEncoder(action_dim, device=device)
+        
+        action_prior = GaussianPrior(action_dim)
+        self.flow_model = ConditionalFlowModel(target_dim=action_dim, 
+                                               cond_dim=self.cond_encoder.output_dim, 
+                                               diffusion_step_embed_dim=diffusion_step_embed_dim,
+                                               down_dims=down_dims,
+                                               source_sampler=action_prior,
+                                               )
+
+        self.to(device)
+
+    def forward(self, obs, action_prior, action) -> torch.Tensor:
+        """
+        Compute the loss for a sampled batch of observations, action_priors, and actions.
+        NOTE: ignores the action_prior in this class, since this is action-unconditional
+        """        
+        cond = self.cond_encoder(obs)
+        action = self.action_encoder(action)
+        loss = self.flow_model(target=action, condition=cond, device=self.device)
+        return loss
+
+    def predict(self, obs, action_prior):
+        """
+        NOTE: ignores the action_prior in this class
+        """
+        cond = self.cond_encoder(obs)
+        batch_size = cond.shape[0]
+        sample = self.flow_model.predict(batch_size=batch_size, 
+                                         condition=cond, 
+                                         num_steps=self.num_inference_steps, 
+                                         device=self.device)
+        return sample.cpu().numpy()
+
+    def to(self, device):
+        self.device = device
+        self.flow_model.to(device)
+        self.cond_encoder.to(device)
+        self.action_encoder.to(device)
+        return self
+
+class FlowActionOnly(ActionTranslatorInterface):
+    """
+    Flow policy that learns p(a_trg | a_src) by flowing from a_src to a_trg, with conditioning on a_src
+    I.e., ignores the observation
+    """
+    def __init__(self,
+                action_dim, 
+                diffusion_step_embed_dim=16,
+                down_dims=[16, 32, 64],
+                num_inference_steps=100,
+                device='cuda'):
+        super(FlowActionOnly, self).__init__()
+        self.action_dim = action_dim
+        self.num_inference_steps = num_inference_steps
+
+        self.action_encoder = IdentityEncoder(action_dim, device=device)
+        
+        action_prior = GaussianPrior(action_dim)
+        self.flow_model = ConditionalFlowModel(target_dim=action_dim, 
+                                               cond_dim=self.action_encoder.output_dim, 
+                                               diffusion_step_embed_dim=diffusion_step_embed_dim,
+                                               down_dims=down_dims,
+                                               source_sampler=action_prior,
+                                               )
+
+        self.to(device)
+
+    def forward(self, obs, action_prior, action) -> torch.Tensor:
+        """
+        Compute the loss for a sampled batch of action_priors, and actions.
+        NOTE: ignores the obs in this class
+        """        
+        cond = self.action_encoder(action)
+        action = self.action_encoder(action)
+        loss = self.flow_model(target=action, condition=cond, prior_samples=action_prior, device=self.device)
+        return loss
+
+    def predict(self, obs, action_prior):
+        """
+        NOTE: ignores the obs in this class
+        """
+        cond = self.action_encoder(action_prior)
+        batch_size = cond.shape[0]
+        sample = self.flow_model.predict(batch_size=batch_size, 
+                                         condition=cond, 
+                                         prior_samples=action_prior,
+                                         num_steps=self.num_inference_steps, 
+                                         device=self.device)
+        return sample.cpu().numpy()
+
+    def to(self, device):
+        self.device = device
+        self.flow_model.to(device)
+        self.action_encoder.to(device)
+        return self
