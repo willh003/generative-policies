@@ -53,6 +53,18 @@ class FlowInverseDynamics(InverseDynamicsInterface):
 
         return sample.cpu().numpy()
 
+    def compute_path_length(self, obs, next_obs, action):
+        cond = self.cond_encoder(obs, next_obs)
+        action = self.action_encoder(action)
+        integrated_path_length, straight_path_length, final_sample = self.flow_model.compute_path_length(
+            target=action,
+            condition=cond,
+            num_steps=self.num_inference_steps,
+            device=self.device
+        )
+
+        return integrated_path_length, straight_path_length, final_sample.cpu().numpy()
+
     def to(self, device):
         self.device = device
         self.flow_model.to(device)

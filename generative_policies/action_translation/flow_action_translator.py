@@ -197,6 +197,8 @@ class FlowActionPriorConditionedTranslator(FlowActionConditionedTranslator):
                                          device=self.device)
         return sample.cpu().numpy()
 
+    
+
 class FlowBC(ActionTranslatorInterface):
     """
     BC policy that learns p(a | o) by flowing from N(0,1) to a, conditioned on o

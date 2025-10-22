@@ -113,13 +113,15 @@ class ConditionalFlowModel(nn.Module):
             
             return x
         
-    def compute_path_length(self, target, condition=None, prior_samples=None, prior_sampler=None, device='cuda'):
+    def compute_path_length(self, target, condition=None, prior_samples=None, prior_sampler=None, num_steps=100, device='cuda'):
         """
         Compute the path length of the flow model (approximate path integral of velocity field)
         """
             
         self.eval()
+        batch_size = target.shape[0]
         with torch.no_grad():
+            
             # Start from source distribution (explicit prior overrides default sampler)
             if self.cond_dim == 0:
                     cond_input = torch.zeros(batch_size, 0, device=device)
@@ -136,8 +138,6 @@ class ConditionalFlowModel(nn.Module):
                 prior_sampler=prior_sampler,
             )  # (batch_size, target_dim)
 
-            batch_size = source.shape[0]
-
             x_t = source.clone()
             dt = 1.0 / num_steps
             integrated_path_length = 0.0
@@ -150,6 +150,7 @@ class ConditionalFlowModel(nn.Module):
                 integrated_path_length += torch.norm(dx, dim=-1)
             final_sample = x_t
         straight_path_length = torch.norm(target - source, dim=-1)
+
         return integrated_path_length, straight_path_length, final_sample
 
 class LatentBridgeModel(ConditionalFlowModel):
