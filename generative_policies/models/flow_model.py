@@ -50,6 +50,7 @@ class ConditionalFlowModel(nn.Module):
         - Find the true velocity field with target - source
         - Train the flow model to predict the velocity field
         """
+        self.train()
         batch_size = target.shape[0]
         if self.cond_dim == 0:
             cond_input = torch.zeros(batch_size, 0, device=device)
@@ -105,14 +106,51 @@ class ConditionalFlowModel(nn.Module):
             )  # (batch_size, target_dim)
             
             dt = 1.0 / num_steps
-            for i in range(num_steps):
-                t = torch.full((batch_size, 1), i * dt, device=device)  # (batch_size, 1)
+            for step in range(num_steps):
+                t = torch.full((batch_size, 1), step * dt, device=device)  # (batch_size, 1)
                 velocity = self.unet(x, cond_input, t)  # (batch_size, target_dim)
                 x = x + velocity * dt
             
             return x
+        
+    def compute_path_length(self, target, condition=None, prior_samples=None, prior_sampler=None, device='cuda'):
+        """
+        Compute the path length of the flow model (approximate path integral of velocity field)
+        """
+            
+        self.eval()
+        with torch.no_grad():
+            # Start from source distribution (explicit prior overrides default sampler)
+            if self.cond_dim == 0:
+                    cond_input = torch.zeros(batch_size, 0, device=device)
+            else:
+                if condition is not None:
+                    cond_input = condition
+                else:
+                    cond_input = torch.zeros(batch_size, self.cond_dim, device=device)  # (batch_size, cond_dim)
+            
+            source = self.sample_source(
+                batch_size=batch_size,
+                device=device,
+                prior_samples=prior_samples,
+                prior_sampler=prior_sampler,
+            )  # (batch_size, target_dim)
 
+            batch_size = source.shape[0]
 
+            x_t = source.clone()
+            dt = 1.0 / num_steps
+            integrated_path_length = 0.0
+
+            for step in range(num_steps):
+                t = torch.full((batch_size, 1), step * dt, device=device)  # (batch_size, 1)
+                velocity = self.unet(x_t, cond_input, t)
+                dx = velocity * dt
+                x_t += dx
+                integrated_path_length += torch.norm(dx, dim=-1)
+            final_sample = x_t
+        straight_path_length = torch.norm(target - source, dim=-1)
+        return integrated_path_length, straight_path_length, final_sample
 
 class LatentBridgeModel(ConditionalFlowModel):
     def __init__(self, target_dim, bridge_noise_sigma, cond_dim=0, diffusion_step_embed_dim=16, down_dims=[128, 256, 512], source_sampler=None):
