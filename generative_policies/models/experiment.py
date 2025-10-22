@@ -537,7 +537,7 @@ def plot_conditional_generation(flow_model, test_data, test_conditions, device='
     plt.show()
 
 
-def run_experiment(model_type='fm', epochs=100, batch_size=256, learning_rate=1e-4):
+def run_experiment(model_type='fm', epochs=100, batch_size=256, learning_rate=1e-4, n_samples=5000):
     """
     Create a flow model
 
@@ -564,7 +564,7 @@ def run_experiment(model_type='fm', epochs=100, batch_size=256, learning_rate=1e
     
     # Generate bimodal 2D data
     print("Generating bimodal 2D data...")
-    target_data = generate_bimodal_data(n_samples=5000, noise=0.1)
+    target_data = generate_bimodal_data(n_samples=n_samples, noise=0.1)
     print(f"Generated {target_data.shape[0]} samples")
     
     # Split data into train/validation/test using torch
@@ -1814,9 +1814,9 @@ def run_single_model_inference_experiment():
     print(f"Test samples: {test_data.shape[0]}")
     
     # Define inference parameter grid
-    eta_values = np.linspace(0.03, 0.5, 20)
-    mu_values = [0.35]
-    grad_types = ['nag', 'gd']
+    eta_values = np.linspace(0.003, 0.3, 20)
+    mu_values = [0.035, 0.35]
+    grad_types = ['nag']
     
     print(f"Inference parameter grid:")
     print(f"  Eta values: {eta_values}")
@@ -1982,10 +1982,314 @@ def create_inference_summary_plot(flow_model, target_data, eta_values, mu_values
     print(f"Summary plot saved: {save_path}")
 
 
+def run_action_chunk_steering_experiment():
+    """
+    Action chunk steering experiment using trajectory data.
+    
+    - Uses action chunks of dimension 16 from trajectory data
+    - Human actions serve as prior/condition for predicting robot actions
+    - Two modes: Mode 1 (robot_mode_1, human_mode_1) and Mode 2 (robot_mode_2, human_mode_2)
+    - Train conditional flow models to predict robot actions given human actions
+    - Test steering by providing human action chunks as conditions
+    """
+    print("Starting Action Chunk Steering Experiment...")
+    
+    # Import the trajectory generation functions
+    import sys
+    import os
+    sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'test'))
+    from prior_trajectory_steering import generate_paired_action_chunks
+    
+    plots_dir = "test_plots"
+    os.makedirs(plots_dir, exist_ok=True)
+    print(f"Created plots directory: {plots_dir}")
+    
+    torch.manual_seed(42)
+    np.random.seed(42)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"Using device: {device}")
+    
+    # Generate trajectory data and paired action chunks
+    print("Generating trajectory data and action chunks...")
+    pairs_data = generate_paired_action_chunks(n_trajectories=200, n_steps=128, chunk_size=16)
+    
+    # Extract robot and human action chunks
+    mode_1_pairs = pairs_data['mode_1_pairs']
+    mode_2_pairs = pairs_data['mode_2_pairs']
+    
+    print(f"Generated {len(mode_1_pairs)} mode 1 pairs")
+    print(f"Generated {len(mode_2_pairs)} mode 2 pairs")
+    
+    # Convert to tensors - extract actions (y coordinates) and states (first x coordinate)
+    def chunks_to_actions_and_states(pairs_list):
+        robot_actions = []
+        human_actions = []
+        robot_states = []
+        human_states = []
+        for pair in pairs_list:
+            # Actions are the y coordinates (16-dimensional)
+            robot_actions.append(torch.tensor(pair['robot'][:, 1], dtype=torch.float32))
+            human_actions.append(torch.tensor(pair['human'][:, 1], dtype=torch.float32))
+            # States are the first x coordinate (1-dimensional)
+            robot_states.append(torch.tensor(pair['robot'][0, 0], dtype=torch.float32))
+            human_states.append(torch.tensor(pair['human'][0, 0], dtype=torch.float32))
+        return (torch.stack(robot_actions), torch.stack(human_actions), 
+                torch.stack(robot_states), torch.stack(human_states))
+    
+    # Mode 1 data
+    robot_mode_1, human_mode_1, robot_state_1, human_state_1 = chunks_to_actions_and_states(mode_1_pairs)
+    # Mode 2 data  
+    robot_mode_2, human_mode_2, robot_state_2, human_state_2 = chunks_to_actions_and_states(mode_2_pairs)
+    
+    print(f"Robot mode 1 actions shape: {robot_mode_1.shape}")
+    print(f"Human mode 1 actions shape: {human_mode_1.shape}")
+    print(f"Robot mode 1 states shape: {robot_state_1.shape}")
+    print(f"Human mode 1 states shape: {human_state_1.shape}")
+    print(f"Robot mode 2 actions shape: {robot_mode_2.shape}")
+    print(f"Human mode 2 actions shape: {human_mode_2.shape}")
+    print(f"Robot mode 2 states shape: {robot_state_2.shape}")
+    print(f"Human mode 2 states shape: {human_state_2.shape}")
+    
+    # Combine data for training
+    all_robot_actions = torch.cat([robot_mode_1, robot_mode_2], dim=0)
+    all_human_actions = torch.cat([human_mode_1, human_mode_2], dim=0)
+    all_robot_states = torch.cat([robot_state_1, robot_state_2], dim=0)
+    all_human_states = torch.cat([human_state_1, human_state_2], dim=0)
+    
+    # Create mode labels (0 for mode 1, 1 for mode 2)
+    mode_labels = torch.cat([
+        torch.zeros(len(mode_1_pairs), dtype=torch.long),
+        torch.ones(len(mode_2_pairs), dtype=torch.long)
+    ])
+    
+    # Split data into train/val/test (60/20/20)
+    n_samples = all_robot_actions.shape[0]
+    indices = torch.randperm(n_samples)
+    
+    train_n = int(0.6 * n_samples)
+    val_n = int(0.2 * n_samples)
+    
+    train_idx = indices[:train_n]
+    val_idx = indices[train_n:train_n + val_n]
+    test_idx = indices[train_n + val_n:]
+    
+    train_robot = all_robot_actions[train_idx]
+    train_human = all_human_actions[train_idx]
+    train_robot_state = all_robot_states[train_idx]
+    train_human_state = all_human_states[train_idx]
+    train_modes = mode_labels[train_idx]
+    
+    val_robot = all_robot_actions[val_idx]
+    val_human = all_human_actions[val_idx]
+    val_robot_state = all_robot_states[val_idx]
+    val_human_state = all_human_states[val_idx]
+    val_modes = mode_labels[val_idx]
+    
+    test_robot = all_robot_actions[test_idx]
+    test_human = all_human_actions[test_idx]
+    test_robot_state = all_robot_states[test_idx]
+    test_human_state = all_human_states[test_idx]
+    test_modes = mode_labels[test_idx]
+    
+    print(f"Train samples: {train_robot.shape[0]}")
+    print(f"Validation samples: {val_robot.shape[0]}")
+    print(f"Test samples: {test_robot.shape[0]}")
+    
+    # Create source sampler for robot actions (Gaussian)
+    action_dim = 16  # 16 y-coordinates
+    state_dim = 1    # 1 x-coordinate (first state)
+    source_sampler = gaussian_sampler(action_dim, mean=0.0, std=1.0)
+    
+    # Create conditional flow model (human actions + states as condition)
+    print("Creating conditional flow model...")
+    flow_model = ConditionalFlowModel(
+        target_dim=action_dim,  # Robot action dimension (16 y-coordinates)
+        cond_dim=action_dim + state_dim,  # Human action (16) + human state (1) as condition
+        source_sampler=source_sampler
+    ).to(device)
+    
+    print(f"Model parameters: {sum(p.numel() for p in flow_model.parameters()):,}")
+    
+    # Training configuration
+    epochs = 500
+    batch_size = 128
+    learning_rate = 1e-3
+    
+    print(f"Training configuration:")
+    print(f"  Epochs: {epochs}")
+    print(f"  Batch size: {batch_size}")
+    print(f"  Learning rate: {learning_rate}")
+    
+    # Combine human actions and states as conditions
+    train_conditions = torch.cat([train_human, train_human_state.unsqueeze(1)], dim=1)
+    val_conditions = torch.cat([val_human, val_human_state.unsqueeze(1)], dim=1)
+    
+    print(f"Train conditions shape: {train_conditions.shape}")
+    print(f"Val conditions shape: {val_conditions.shape}")
+    
+    # Train the model
+    print("Training the action chunk steering model...")
+    history = train_flow_model(
+        flow_model=flow_model,
+        train_data=train_robot,
+        val_data=val_robot,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        device=device,
+        verbose=True,
+        train_conditions=train_conditions,
+        val_conditions=val_conditions
+    )
+    
+    # Plot training history
+    print("Plotting training history...")
+    plot_training_history(history, save_path=os.path.join(plots_dir, 'action_chunk_training_history.png'))
+    
+    # Test steering with different human action conditions
+    print("Testing action chunk steering...")
+    
+    # Test 1: Generate robot actions conditioned on mode 1 human actions and states
+    with torch.no_grad():
+        # Sample some mode 1 human actions and states as conditions
+        mode_1_test_indices = torch.where(test_modes == 0)[0][:500]
+        mode_1_human_actions = test_human[mode_1_test_indices]
+        mode_1_human_states = test_human_state[mode_1_test_indices]
+        mode_1_robot_targets = test_robot[mode_1_test_indices]
+        
+        # Combine human actions and states as conditions
+        mode_1_conditions = torch.cat([mode_1_human_actions, mode_1_human_states.unsqueeze(1)], dim=1)
+        
+        # Generate robot actions conditioned on mode 1 human actions and states
+        mode_1_generated = flow_model.predict(
+            batch_size=len(mode_1_conditions),
+            condition=mode_1_conditions,
+            device=device,
+            num_steps=100
+        )
+    
+    # Test 2: Generate robot actions conditioned on mode 2 human actions and states
+    with torch.no_grad():
+        # Sample some mode 2 human actions and states as conditions
+        mode_2_test_indices = torch.where(test_modes == 1)[0][:500]
+        mode_2_human_actions = test_human[mode_2_test_indices]
+        mode_2_human_states = test_human_state[mode_2_test_indices]
+        mode_2_robot_targets = test_robot[mode_2_test_indices]
+        
+        # Combine human actions and states as conditions
+        mode_2_conditions = torch.cat([mode_2_human_actions, mode_2_human_states.unsqueeze(1)], dim=1)
+        
+        # Generate robot actions conditioned on mode 2 human actions and states
+        mode_2_generated = flow_model.predict(
+            batch_size=len(mode_2_conditions),
+            condition=mode_2_conditions,
+            device=device,
+            num_steps=100
+        )
+    
+    # Visualize results by reshaping back to trajectory chunks
+    def visualize_action_chunks(robot_targets, robot_generated, human_actions, human_states, mode_name, save_path):
+        """Visualize action chunks by reshaping back to 16x2 trajectories"""
+        fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+        fig.suptitle(f'Action Chunk Steering - {mode_name}', fontsize=16)
+        
+        # Show first 5 examples
+        n_examples = min(5, len(robot_targets))
+        
+        for i in range(n_examples):
+            # Create x coordinates (assuming uniform spacing from 0 to 1)
+            x_coords = torch.linspace(0, 1, 16)
+            
+            # Robot trajectories: x_coords + robot actions (y coordinates)
+            target_traj = torch.stack([x_coords, robot_targets[i]], dim=1).cpu().numpy()
+            generated_traj = torch.stack([x_coords, robot_generated[i]], dim=1).cpu().numpy()
+            
+            # Human trajectory: x_coords + human actions (y coordinates), starting from human state
+            human_x_start = human_states[i].item()
+            human_x_coords = torch.linspace(human_x_start, human_x_start + 1, 16)
+            human_traj = torch.stack([human_x_coords, human_actions[i]], dim=1).cpu().numpy()
+            
+            # Plot target vs generated
+            axes[0, i].plot(target_traj[:, 0], target_traj[:, 1], 'o-', 
+                           linewidth=2, markersize=4, color='blue', alpha=0.7, label='Target Robot')
+            axes[0, i].plot(generated_traj[:, 0], generated_traj[:, 1], 's-', 
+                           linewidth=2, markersize=4, color='red', alpha=0.7, label='Generated Robot')
+            axes[0, i].set_title(f'Example {i+1}: Robot Actions')
+            axes[0, i].set_xlabel('x')
+            axes[0, i].set_ylabel('y')
+            axes[0, i].grid(True, alpha=0.3)
+            axes[0, i].legend()
+            
+            # Plot human condition
+            axes[1, i].plot(human_traj[:, 0], human_traj[:, 1], '^-', 
+                           linewidth=2, markersize=4, color='green', alpha=0.7, label='Human Condition')
+            axes[1, i].set_title(f'Example {i+1}: Human Condition (start x={human_x_start:.2f})')
+            axes[1, i].set_xlabel('x')
+            axes[1, i].set_ylabel('y')
+            axes[1, i].grid(True, alpha=0.3)
+            axes[1, i].legend()
+        
+        plt.tight_layout()
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.show()
+    
+    # Create visualizations
+    print("Creating visualizations...")
+    visualize_action_chunks(
+        mode_1_robot_targets, mode_1_generated, mode_1_human_actions, mode_1_human_states,
+        'Mode 1', os.path.join(plots_dir, 'action_chunk_steering_mode1.png')
+    )
+    
+    visualize_action_chunks(
+        mode_2_robot_targets, mode_2_generated, mode_2_human_actions, mode_2_human_states,
+        'Mode 2', os.path.join(plots_dir, 'action_chunk_steering_mode2.png')
+    )
+    
+    # Evaluate performance
+    print("Evaluating action chunk steering performance...")
+    
+    # Calculate MSE for each mode
+    mode_1_mse = torch.mean((mode_1_generated - mode_1_robot_targets) ** 2).item()
+    mode_2_mse = torch.mean((mode_2_generated - mode_2_robot_targets) ** 2).item()
+    
+    print(f"Mode 1 MSE: {mode_1_mse:.6f}")
+    print(f"Mode 2 MSE: {mode_2_mse:.6f}")
+    
+    # Test cross-mode steering (use mode 1 human to generate mode 2 robot)
+    print("Testing cross-mode steering...")
+    with torch.no_grad():
+        # Use mode 1 human actions and states to condition mode 2 robot generation
+        cross_mode_conditions = torch.cat([mode_1_human_actions, mode_1_human_states.unsqueeze(1)], dim=1)
+        cross_mode_generated = flow_model.predict(
+            batch_size=len(cross_mode_conditions),
+            condition=cross_mode_conditions,
+            device=device,
+            num_steps=100
+        )
+    
+    # Visualize cross-mode steering
+    visualize_action_chunks(
+        mode_2_robot_targets[:len(cross_mode_generated)], cross_mode_generated, mode_1_human_actions, mode_1_human_states,
+        'Cross-Mode (Mode 1 Human → Mode 2 Robot)', os.path.join(plots_dir, 'action_chunk_cross_mode_steering.png')
+    )
+    
+    cross_mode_mse = torch.mean((cross_mode_generated - mode_2_robot_targets[:len(cross_mode_generated)]) ** 2).item()
+    print(f"Cross-mode MSE: {cross_mode_mse:.6f}")
+    
+    print("Action chunk steering experiment completed successfully!")
+    print(f"All plots saved in '{plots_dir}' directory:")
+    print(f"  - action_chunk_training_history.png")
+    print(f"  - action_chunk_steering_mode1.png")
+    print(f"  - action_chunk_steering_mode2.png")
+    print(f"  - action_chunk_cross_mode_steering.png")
+
+
 if __name__ == "__main__":
-    #### EXPERIMENT OPTIONS
-    run_experiment(model_type='fm', epochs=100)
-    run_experiment(model_type='eqm', epochs=1000)
+    # #### EXPERIMENT OPTIONS
+    #run_experiment(model_type='fm', epochs=100)
+    run_experiment(model_type='eqm', epochs=1000, n_samples=50000)
+    # run_single_model_inference_experiment()
+    # run_action_chunk_steering_experiment()
 
     #run_conditional_experiment()
     #run_equilibrium_hyperparameter_sweep()

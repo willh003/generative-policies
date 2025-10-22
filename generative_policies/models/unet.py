@@ -21,14 +21,18 @@ class ConditionalUNet1D(nn.Module):
             GaussianFourierEmb(diffusion_step_embed_dim),
             nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim * 4),
             nn.Mish(),
-            nn.Linear(diffusion_step_embed_dim * 4, diffusion_step_embed_dim)
+            nn.LayerNorm(diffusion_step_embed_dim * 4),
+            nn.Linear(diffusion_step_embed_dim * 4, diffusion_step_embed_dim),
+            nn.LayerNorm(diffusion_step_embed_dim)
         )
         
         # Condition embedding
         self.cond_embed = nn.Sequential(
             nn.Linear(cond_dim, diffusion_step_embed_dim),
             nn.SiLU(),
-            nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim)
+            nn.LayerNorm(diffusion_step_embed_dim),
+            nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim),
+            nn.LayerNorm(diffusion_step_embed_dim)
         )
         
         # Condition projection layers for each encoder/decoder layer
@@ -39,7 +43,10 @@ class ConditionalUNet1D(nn.Module):
             )
         
         # Input projection
-        self.input_proj = nn.Linear(in_channels, down_dims[0])
+        self.input_proj = nn.Sequential(
+            nn.Linear(in_channels, down_dims[0]),
+            nn.LayerNorm(down_dims[0])
+        )
         
         # Encoder layers
         self.encoder_layers = nn.ModuleList()
@@ -53,9 +60,12 @@ class ConditionalUNet1D(nn.Module):
             out_ch = down_dims[i]
             self.encoder_layers.append(
                 nn.Sequential(
+                    nn.LayerNorm(in_ch),
                     nn.Linear(in_ch, out_ch),
                     nn.SiLU(),
-                    nn.Linear(out_ch, out_ch)
+                    nn.LayerNorm(out_ch),
+                    nn.Linear(out_ch, out_ch),
+                    nn.LayerNorm(out_ch)
                 )
             )
         
@@ -66,23 +76,29 @@ class ConditionalUNet1D(nn.Module):
             decoder_idx = len(down_dims) - 1 - i  # Reverse index
             
             if i == 0:
-                # First decoder layer: last encoder output + condition embedding
-                in_ch = down_dims[-1] + down_dims[decoder_idx]  # h + cond_emb_proj
+                # First decoder layer: last encoder output + skip connection + condition embedding
+                in_ch = down_dims[-1] + down_dims[decoder_idx] + down_dims[decoder_idx]  # h + skip + cond_emb_proj
             else:
-                # Subsequent decoder layers: previous decoder output + condition embedding
+                # Subsequent decoder layers: previous decoder output + skip connection + condition embedding
                 prev_decoder_idx = len(down_dims) - i  # Previous decoder output dimension
-                in_ch = down_dims[prev_decoder_idx] + down_dims[decoder_idx]  # h + cond_emb_proj
+                in_ch = down_dims[prev_decoder_idx] + down_dims[decoder_idx] + down_dims[decoder_idx]  # h + skip + cond_emb_proj
             out_ch = down_dims[decoder_idx]
             self.decoder_layers.append(
                 nn.Sequential(
+                    nn.LayerNorm(in_ch),
                     nn.Linear(in_ch, out_ch),
                     nn.SiLU(),
-                    nn.Linear(out_ch, out_ch)
+                    nn.LayerNorm(out_ch),
+                    nn.Linear(out_ch, out_ch),
+                    nn.LayerNorm(out_ch)
                 )
             )
         
         # Output projection
-        self.output_proj = nn.Linear(down_dims[0], out_channels)
+        self.output_proj = nn.Sequential(
+            nn.LayerNorm(down_dims[0]),
+            nn.Linear(down_dims[0], out_channels)
+        )
 
     def forward(self, x, c, t):
         """
@@ -118,9 +134,15 @@ class ConditionalUNet1D(nn.Module):
         for i, layer in enumerate(self.decoder_layers):
             # Decoder works in reverse order, so we need to use reverse index for condition projection
             decoder_idx = len(self.down_dims) - 1 - i
+            
+            # Get skip connection from encoder
+            skip = encoder_outputs[decoder_idx]
+            
             # Project condition embedding to match current layer dimension
             cond_emb_proj = self.cond_projections[decoder_idx](cond_emb)
-            h = layer(torch.cat([h, cond_emb_proj], dim=-1))
+            
+            # Concatenate: current hidden state + skip connection + condition
+            h = layer(torch.cat([h, skip, cond_emb_proj], dim=-1))
         
         # Output projection
         output = self.output_proj(h)

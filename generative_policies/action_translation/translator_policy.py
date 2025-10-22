@@ -24,6 +24,8 @@ class ActionTranslatorPolicy:
         state: Optional[tuple[np.ndarray, ...]] = None,
         episode_start: Optional[np.ndarray] = None,
         deterministic: bool = True,
+        mask_source_action: bool = False,
+        mask_observation: bool = False,
         ):
         """
         Predict a base action and then translate it, returning both
@@ -31,5 +33,11 @@ class ActionTranslatorPolicy:
         base_prediction = self.source_policy.predict(policy_observation, state, episode_start, deterministic)
         # Extract just the action from the base policy prediction (which is a tuple of (action, state))
         base_action = base_prediction[0] if isinstance(base_prediction, tuple) else base_prediction
+        
+        if mask_source_action:
+            base_action = np.zeros_like(base_action)
+        if mask_observation:
+            translator_observation = np.zeros_like(translator_observation)
+            
         translated_action = self.action_translator.predict(translator_observation, base_action)
         return translated_action, base_action

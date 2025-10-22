@@ -23,6 +23,7 @@ class FlowActionPriorTranslator(ActionTranslatorInterface):
         self.action_dim = action_dim
         self.obs_dim = obs_dim
         self.obs_encoder = IdentityEncoder(obs_dim, device=device)
+        self.action_encoder = IdentityEncoder(action_dim, device=device)
         self.flow_model = ConditionalFlowModel(target_dim=action_dim, 
                                                cond_dim=self.obs_encoder.output_dim, 
                                                diffusion_step_embed_dim=diffusion_step_embed_dim,
@@ -46,7 +47,8 @@ class FlowActionPriorTranslator(ActionTranslatorInterface):
     def predict(self, obs, action_prior):
         cond = self.obs_encoder(obs)
         action_prior = self.action_encoder(action_prior)
-        batch_size = obs.shape[0]
+        batch_size = cond.shape[0]
+
         sample = self.flow_model.predict(batch_size=batch_size, 
                                          condition=cond, 
                                          prior_samples=action_prior,
@@ -117,7 +119,45 @@ class FlowActionConditionedTranslator(ActionTranslatorInterface):
         self.action_encoder.to(device)
         return self
 
+
+class FlowDeltaTranslator(FlowActionConditionedTranslator):
+    """
+    Action translator that learns p(a_trg | o, a_src), conditioned explicitly on a_src
+    Predicts the delta a_trg - a_src instead of the action itself, using 
+    N(0,1) as the prior for the delta
+    """
     
+    def __init__(self,
+                action_dim, 
+                obs_dim,
+                diffusion_step_embed_dim=16,
+                down_dims=[16, 32, 64],
+                num_inference_steps=100,
+                device='cuda'):
+        super(FlowDeltaTranslator, self).__init__(action_dim, obs_dim, diffusion_step_embed_dim, down_dims, num_inference_steps, device)
+
+    def forward(self, obs, action_prior, action) -> torch.Tensor:
+        """
+        Compute the loss for a sampled batch of observations, action_priors, and actions.
+        """        
+        cond = self.cond_encoder(obs, action_prior)
+        action_prior = self.action_encoder(action_prior)
+        action = self.action_encoder(action)
+        action_delta = action - action_prior
+        loss = self.flow_model(target=action_delta, condition=cond, device=self.device)
+        
+        return loss
+
+    def predict(self, obs, action_prior):
+        cond = self.cond_encoder(obs, action_prior)
+        action_prior = self.action_encoder(action_prior)
+        batch_size = cond.shape[0]
+        sample = self.flow_model.predict(batch_size=batch_size, 
+                                         condition=cond, 
+                                         num_steps=self.num_inference_steps, 
+                                         device=self.device)
+        return sample.cpu().numpy() + action_prior.cpu().numpy()
+
 class FlowActionPriorConditionedTranslator(FlowActionConditionedTranslator):
     """
     Acion translator that learns p(a_trg | o, a_src), conditioned explicitly and implicitly on a_src
@@ -149,6 +189,7 @@ class FlowActionPriorConditionedTranslator(FlowActionConditionedTranslator):
         cond = self.cond_encoder(obs, action_prior)
         action_prior = self.action_encoder(action_prior)
         batch_size = cond.shape[0]
+
         sample = self.flow_model.predict(batch_size=batch_size, 
                                          condition=cond, 
                                          prior_samples=action_prior,
@@ -202,6 +243,7 @@ class FlowBC(ActionTranslatorInterface):
         """
         cond = self.cond_encoder(obs)
         batch_size = cond.shape[0]
+
         sample = self.flow_model.predict(batch_size=batch_size, 
                                          condition=cond, 
                                          num_steps=self.num_inference_steps, 
@@ -256,8 +298,10 @@ class FlowActionOnly(ActionTranslatorInterface):
         """
         NOTE: ignores the obs in this class
         """
+        action_prior = self.action_encoder(action_prior)
         cond = self.action_encoder(action_prior)
         batch_size = cond.shape[0]
+
         sample = self.flow_model.predict(batch_size=batch_size, 
                                          condition=cond, 
                                          prior_samples=action_prior,
