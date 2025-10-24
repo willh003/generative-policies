@@ -61,6 +61,21 @@ class FlowActionPriorTranslator(ActionTranslatorInterface):
         self.flow_model.to(device)
         self.obs_encoder.to(device)
         return self
+    
+    def compute_path_length(self, obs, action_prior, action):
+        cond = self.obs_encoder(obs)
+        action_prior = self.action_encoder(action_prior)
+        action = self.action_encoder(action)
+
+        integrated_path_length, straight_path_length, final_sample = self.flow_model.compute_path_length(
+                                         target=action,
+                                         condition=cond,
+                                         prior_samples=action_prior,
+                                         num_steps=self.num_inference_steps,
+                                         device=self.device)
+        
+        return integrated_path_length, straight_path_length, final_sample.cpu().numpy()
+
 
 
 class FlowActionConditionedTranslator(ActionTranslatorInterface):
@@ -118,6 +133,18 @@ class FlowActionConditionedTranslator(ActionTranslatorInterface):
         self.cond_encoder.to(device)
         self.action_encoder.to(device)
         return self
+
+    def compute_path_length(self, obs, action_prior, action):
+        cond = self.cond_encoder(obs, action_prior)
+        action = self.action_encoder(action)
+        integrated_path_length, straight_path_length, final_sample = self.flow_model.compute_path_length(
+                                         target=action,
+                                         condition=cond,
+                                         num_steps=self.num_inference_steps,
+                                         device=self.device)
+        
+        return integrated_path_length, straight_path_length, final_sample.cpu().numpy()
+
 
 
 class FlowDeltaTranslator(FlowActionConditionedTranslator):
@@ -197,6 +224,15 @@ class FlowActionPriorConditionedTranslator(FlowActionConditionedTranslator):
                                          device=self.device)
         return sample.cpu().numpy()
 
+
+    def compute_path_length(self, obs, action_prior, action):
+        cond = self.cond_encoder(obs, action_prior)
+        action_prior = self.action_encoder(action_prior)
+        action = self.action_encoder(action)
+        integrated_path_length, straight_path_length, final_sample = self.flow_model.compute_path_length(target=action, condition=cond, prior_samples=action_prior, device=self.device)
+        
+        return integrated_path_length, straight_path_length, final_sample.cpu().numpy()
+
     
 
 class FlowBC(ActionTranslatorInterface):
@@ -258,6 +294,14 @@ class FlowBC(ActionTranslatorInterface):
         self.cond_encoder.to(device)
         self.action_encoder.to(device)
         return self
+
+    def compute_path_length(self, obs, action_prior, action):
+        cond = self.cond_encoder(obs)
+        action = self.action_encoder(action)
+        integrated_path_length, straight_path_length, final_sample = self.flow_model.compute_path_length(target=action, condition=cond, device=self.device)
+        
+        return integrated_path_length, straight_path_length, final_sample.cpu().numpy()
+
 
 class FlowActionOnly(ActionTranslatorInterface):
     """
