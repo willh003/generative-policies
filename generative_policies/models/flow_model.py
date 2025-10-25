@@ -6,7 +6,10 @@ from .prior import GaussianPrior
 from .transformer import DiT_S, DiT_B
 
 class ConditionalFlowModel(nn.Module):
-    def __init__(self, target_dim, cond_dim=0, diffusion_step_embed_dim=32, down_dims=[32, 64, 128], source_sampler=None, model_type='unet'):
+    def __init__(self, target_dim, cond_dim=0, diffusion_step_embed_dim=32, down_dims=[32, 64, 128], source_sampler=None, model_type='unet', use_spectral_norm=False):
+        """
+        use_spectral_norm: whether to use spectral normalization on the linear layers of the model (only for unet)
+        """
         super(ConditionalFlowModel, self).__init__()
         self.target_dim = target_dim
         self.cond_dim = cond_dim
@@ -18,7 +21,8 @@ class ConditionalFlowModel(nn.Module):
                 out_channels=target_dim,
                 diffusion_step_embed_dim=diffusion_step_embed_dim,
                 down_dims=down_dims,
-                cond_dim=cond_dim  # Only the actual condition dimension
+                cond_dim=cond_dim,  # Only the actual condition dimension
+                use_spectral_norm=use_spectral_norm
             )
         elif model_type == 'transformer':   
             self.model = DiT_S(

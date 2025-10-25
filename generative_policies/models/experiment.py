@@ -593,10 +593,11 @@ def run_experiment(model_type='fm', epochs=100, batch_size=256, learning_rate=1e
     target_dim = 2
     if model_type == 'fm':
         flow_model = ConditionalFlowModel(
-        target_dim=target_dim,
-        cond_dim=0,  # No additional conditioning
-        source_sampler=gaussian_sampler(target_dim),  # Default Gaussian source
-        model_type='transformer'
+            target_dim=target_dim,
+            cond_dim=0,  # No additional conditioning
+            source_sampler=gaussian_sampler(target_dim),  # Default Gaussian source
+            model_type='unet',
+            use_spectral_norm=True
         )
     elif model_type == 'eqm':
 
@@ -739,8 +740,11 @@ def run_conditional_experiment():
     flow_model = ConditionalFlowModel(
         target_dim=target_dim,
         cond_dim=cond_dim,
-        source_sampler=gaussian_sampler(target_dim)  # Use mixture source for more interesting flow
+        source_sampler=gaussian_sampler(target_dim),  # Use mixture source for more interesting flow
+        model_type='unet',
+        use_spectral_norm=True
     )
+
     # flow_model = LatentBridgeModel(
     #     target_dim=target_dim,
     #     bridge_noise_sigma=0.01,
@@ -2289,8 +2293,9 @@ def run_action_chunk_steering_experiment():
 
 if __name__ == "__main__":
     # #### EXPERIMENT OPTIONS
-    #run_experiment(model_type='fm', epochs=100)
-    run_experiment(model_type='eqm', epochs=100)
+    run_experiment(model_type='fm', epochs=500)
+    #run_experiment(model_type='eqm', epochs=100)
+    #run_conditional_experiment()
     # run_single_model_inference_experiment()
     # run_action_chunk_steering_experiment()
 

@@ -50,6 +50,16 @@ class MlpActionTranslator(ActionTranslatorInterface):
             action = action.squeeze(dim=1)
         loss = torch.nn.functional.mse_loss(predicted_action, action)
         return loss
+    
+    def compute_path_length(self, obs, action_prior, action):
+        """
+        For compatibility with FlowActionTranslator. Returns zeros for path length and predicted action.
+        """
+        cond = self.cond_encoder(obs, action_prior)
+        predicted_action = self.network(cond)
+
+        batch_size = action.shape[0]
+        return torch.zeros(batch_size), torch.zeros(batch_size), predicted_action.cpu().numpy()
         
     def is_vectorized_observation(self, obs):
         return len(obs.shape) > 1

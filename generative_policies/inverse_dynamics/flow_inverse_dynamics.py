@@ -19,7 +19,8 @@ class FlowInverseDynamics(InverseDynamicsInterface):
                 diffusion_step_embed_dim=16,
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
-                device='cuda'):
+                device='cuda',
+                use_spectral_norm=False):
         super(FlowInverseDynamics, self).__init__()
         self.action_dim = action_dim
         self.num_inference_steps = num_inference_steps
@@ -31,7 +32,8 @@ class FlowInverseDynamics(InverseDynamicsInterface):
                                                cond_dim=self.cond_encoder.output_dim, 
                                                diffusion_step_embed_dim=diffusion_step_embed_dim,
                                                down_dims=down_dims,
-                                               source_sampler=action_prior
+                                               source_sampler=action_prior,
+                                               use_spectral_norm=use_spectral_norm
                                                )
         self.to(device)
 

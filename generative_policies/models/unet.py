@@ -8,45 +8,76 @@ from abc import ABC, abstractmethod
 from generative_policies.utils import SinusoidalPosEmb, GaussianFourierEmb
 
 class ConditionalUNet1D(nn.Module):
-    def __init__(self, in_channels, out_channels, diffusion_step_embed_dim, down_dims, cond_dim):
+    def __init__(self, in_channels, out_channels, diffusion_step_embed_dim, down_dims, cond_dim, use_spectral_norm=False):
         super(ConditionalUNet1D, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.diffusion_step_embed_dim = diffusion_step_embed_dim
         self.down_dims = down_dims
         self.cond_dim = cond_dim
+        self.use_spectral_norm = use_spectral_norm
+        
+        # Helper method to create linear layers with optional spectral normalization
+        def create_linear(in_features, out_features):
+            linear = nn.Linear(in_features, out_features)
+            if self.use_spectral_norm:
+                return nn.utils.spectral_norm(linear)
+            return linear
         
         # Time embedding (Gaussian Fourier + MLP)
-        self.time_embed = nn.Sequential(
-            GaussianFourierEmb(diffusion_step_embed_dim),
-            nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim * 4),
-            nn.Mish(),
-            nn.LayerNorm(diffusion_step_embed_dim * 4),
-            nn.Linear(diffusion_step_embed_dim * 4, diffusion_step_embed_dim),
-            nn.LayerNorm(diffusion_step_embed_dim)
-        )
+        if self.use_spectral_norm:
+            time_layers = [
+                GaussianFourierEmb(diffusion_step_embed_dim),
+                create_linear(diffusion_step_embed_dim, diffusion_step_embed_dim * 4),
+                nn.Mish(),
+                create_linear(diffusion_step_embed_dim * 4, diffusion_step_embed_dim)
+            ]
+        else:
+            time_layers = [
+                GaussianFourierEmb(diffusion_step_embed_dim),
+                create_linear(diffusion_step_embed_dim, diffusion_step_embed_dim * 4),
+                nn.Mish(),
+                nn.LayerNorm(diffusion_step_embed_dim * 4),
+                create_linear(diffusion_step_embed_dim * 4, diffusion_step_embed_dim),
+                nn.LayerNorm(diffusion_step_embed_dim)
+            ]
+        self.time_embed = nn.Sequential(*time_layers)
         
         # Condition embedding
-        self.cond_embed = nn.Sequential(
-            nn.Linear(cond_dim, diffusion_step_embed_dim),
-            nn.SiLU(),
-            nn.LayerNorm(diffusion_step_embed_dim),
-            nn.Linear(diffusion_step_embed_dim, diffusion_step_embed_dim),
-            nn.LayerNorm(diffusion_step_embed_dim)
-        )
+        if self.use_spectral_norm:
+            cond_layers = [
+                create_linear(cond_dim, diffusion_step_embed_dim),
+                nn.SiLU(),
+                create_linear(diffusion_step_embed_dim, diffusion_step_embed_dim)
+            ]
+        else:
+            cond_layers = [
+                create_linear(cond_dim, diffusion_step_embed_dim),
+                nn.SiLU(),
+                nn.LayerNorm(diffusion_step_embed_dim),
+                create_linear(diffusion_step_embed_dim, diffusion_step_embed_dim),
+                nn.LayerNorm(diffusion_step_embed_dim)
+            ]
+        self.cond_embed = nn.Sequential(*cond_layers)
         
         # Condition projection layers for each encoder/decoder layer
         self.cond_projections = nn.ModuleList()
         for dim in down_dims:
             self.cond_projections.append(
-                nn.Linear(diffusion_step_embed_dim, dim)
+                create_linear(diffusion_step_embed_dim, dim)
             )
         
         # Input projection
-        self.input_proj = nn.Sequential(
-            nn.Linear(in_channels, down_dims[0]),
-            nn.LayerNorm(down_dims[0])
-        )
+        if self.use_spectral_norm:
+            input_layers = [
+                create_linear(in_channels, down_dims[0])
+            ]
+        else:
+            input_layers = [
+                create_linear(in_channels, down_dims[0]),
+                nn.LayerNorm(down_dims[0])
+            ]
+        self.input_proj = nn.Sequential(*input_layers)
         
         # Encoder layers
         self.encoder_layers = nn.ModuleList()
@@ -58,16 +89,23 @@ class ConditionalUNet1D(nn.Module):
                 # Subsequent layers: previous layer output + condition embedding
                 in_ch = down_dims[i-1] + down_dims[i]  # h + cond_emb_proj
             out_ch = down_dims[i]
-            self.encoder_layers.append(
-                nn.Sequential(
+            
+            if self.use_spectral_norm:
+                encoder_block = [
+                    create_linear(in_ch, out_ch),
+                    nn.SiLU(),
+                    create_linear(out_ch, out_ch)
+                ]
+            else:
+                encoder_block = [
                     nn.LayerNorm(in_ch),
-                    nn.Linear(in_ch, out_ch),
+                    create_linear(in_ch, out_ch),
                     nn.SiLU(),
                     nn.LayerNorm(out_ch),
-                    nn.Linear(out_ch, out_ch),
+                    create_linear(out_ch, out_ch),
                     nn.LayerNorm(out_ch)
-                )
-            )
+                ]
+            self.encoder_layers.append(nn.Sequential(*encoder_block))
         
         # Decoder layers (reverse order of encoder)
         self.decoder_layers = nn.ModuleList()
@@ -83,22 +121,35 @@ class ConditionalUNet1D(nn.Module):
                 prev_decoder_idx = len(down_dims) - i  # Previous decoder output dimension
                 in_ch = down_dims[prev_decoder_idx] + down_dims[decoder_idx] + down_dims[decoder_idx]  # h + skip + cond_emb_proj
             out_ch = down_dims[decoder_idx]
-            self.decoder_layers.append(
-                nn.Sequential(
+            
+            if self.use_spectral_norm:
+                decoder_block = [
+                    create_linear(in_ch, out_ch),
+                    nn.SiLU(),
+                    create_linear(out_ch, out_ch)
+                ]
+            else:
+                decoder_block = [
                     nn.LayerNorm(in_ch),
-                    nn.Linear(in_ch, out_ch),
+                    create_linear(in_ch, out_ch),
                     nn.SiLU(),
                     nn.LayerNorm(out_ch),
-                    nn.Linear(out_ch, out_ch),
+                    create_linear(out_ch, out_ch),
                     nn.LayerNorm(out_ch)
-                )
-            )
+                ]
+            self.decoder_layers.append(nn.Sequential(*decoder_block))
         
         # Output projection
-        self.output_proj = nn.Sequential(
-            nn.LayerNorm(down_dims[0]),
-            nn.Linear(down_dims[0], out_channels)
-        )
+        if self.use_spectral_norm:
+            output_layers = [
+                create_linear(down_dims[0], out_channels)
+            ]
+        else:
+            output_layers = [
+                nn.LayerNorm(down_dims[0]),
+                create_linear(down_dims[0], out_channels)
+            ]
+        self.output_proj = nn.Sequential(*output_layers)
 
     def forward(self, x, c, t):
         """

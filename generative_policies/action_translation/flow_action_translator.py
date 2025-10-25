@@ -18,7 +18,9 @@ class FlowActionPriorTranslator(ActionTranslatorInterface):
                 diffusion_step_embed_dim=16,
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
-                device='cuda'):
+                device='cuda',
+                model_type='unet',
+                use_spectral_norm=False):
         super(FlowActionPriorTranslator, self).__init__()
         self.action_dim = action_dim
         self.obs_dim = obs_dim
@@ -28,7 +30,8 @@ class FlowActionPriorTranslator(ActionTranslatorInterface):
                                                cond_dim=self.obs_encoder.output_dim, 
                                                diffusion_step_embed_dim=diffusion_step_embed_dim,
                                                down_dims=down_dims,
-                                               )
+                                               model_type=model_type,
+                                               use_spectral_norm=use_spectral_norm)
         self.num_inference_steps = num_inference_steps
 
         self.to(device)
@@ -89,7 +92,9 @@ class FlowActionConditionedTranslator(ActionTranslatorInterface):
                 diffusion_step_embed_dim=16,
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
-                device='cuda'):
+                device='cuda',
+                model_type='unet',
+                use_spectral_norm=False):
         super(FlowActionConditionedTranslator, self).__init__()
         self.action_dim = action_dim
         self.obs_dim = obs_dim
@@ -104,7 +109,8 @@ class FlowActionConditionedTranslator(ActionTranslatorInterface):
                                                diffusion_step_embed_dim=diffusion_step_embed_dim,
                                                down_dims=down_dims,
                                                source_sampler=action_prior,
-                                               )
+                                               model_type=model_type,
+                                               use_spectral_norm=use_spectral_norm)
 
         self.to(device)
 
@@ -160,8 +166,9 @@ class FlowDeltaTranslator(FlowActionConditionedTranslator):
                 diffusion_step_embed_dim=16,
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
-                device='cuda'):
-        super(FlowDeltaTranslator, self).__init__(action_dim, obs_dim, diffusion_step_embed_dim, down_dims, num_inference_steps, device)
+                device='cuda',
+                model_type='unet'):
+        super(FlowDeltaTranslator, self).__init__(action_dim, obs_dim, diffusion_step_embed_dim, down_dims, num_inference_steps, device, model_type)
 
     def forward(self, obs, action_prior, action) -> torch.Tensor:
         """
@@ -198,8 +205,9 @@ class FlowActionPriorConditionedTranslator(FlowActionConditionedTranslator):
                 diffusion_step_embed_dim=16,
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
-                device='cuda'):
-        super().__init__(action_dim, obs_dim, diffusion_step_embed_dim, down_dims, num_inference_steps, device)
+                device='cuda',
+                model_type='unet'):
+        super().__init__(action_dim, obs_dim, diffusion_step_embed_dim, down_dims, num_inference_steps, device, model_type)
 
     def forward(self, obs, action_prior, action) -> torch.Tensor:
         """
@@ -246,7 +254,9 @@ class FlowBC(ActionTranslatorInterface):
                 diffusion_step_embed_dim=16,
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
-                device='cuda'):
+                device='cuda',
+                model_type='unet',
+                use_spectral_norm=False):
         super(FlowBC, self).__init__()
         self.action_dim = action_dim
         self.obs_dim = obs_dim
@@ -261,7 +271,8 @@ class FlowBC(ActionTranslatorInterface):
                                                diffusion_step_embed_dim=diffusion_step_embed_dim,
                                                down_dims=down_dims,
                                                source_sampler=action_prior,
-                                               )
+                                               model_type=model_type,
+                                               use_spectral_norm=use_spectral_norm)
 
         self.to(device)
 
@@ -314,7 +325,8 @@ class FlowActionOnly(ActionTranslatorInterface):
                 diffusion_step_embed_dim=16,
                 down_dims=[16, 32, 64],
                 num_inference_steps=100,
-                device='cuda'):
+                device='cuda',
+                model_type='unet'):
         super(FlowActionOnly, self).__init__()
         self.action_dim = action_dim
         self.num_inference_steps = num_inference_steps
@@ -327,7 +339,8 @@ class FlowActionOnly(ActionTranslatorInterface):
                                                diffusion_step_embed_dim=diffusion_step_embed_dim,
                                                down_dims=down_dims,
                                                source_sampler=action_prior,
-                                               )
+                                               model_type=model_type,
+                                               use_spectral_norm=use_spectral_norm)
 
         self.to(device)
 
