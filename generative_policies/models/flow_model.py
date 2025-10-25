@@ -3,21 +3,29 @@ import torch.nn as nn
 import torch.nn.functional as F
 from .unet import ConditionalUNet1D
 from .prior import GaussianPrior
+from .transformer import DiT_S, DiT_B
 
 class ConditionalFlowModel(nn.Module):
-    def __init__(self, target_dim, cond_dim=0, diffusion_step_embed_dim=32, down_dims=[32, 64, 128], source_sampler=None):
+    def __init__(self, target_dim, cond_dim=0, diffusion_step_embed_dim=32, down_dims=[32, 64, 128], source_sampler=None, model_type='unet'):
         super(ConditionalFlowModel, self).__init__()
         self.target_dim = target_dim
         self.cond_dim = cond_dim
 
-        # Initialize the conditional UNet
-        self.unet = ConditionalUNet1D(
-            in_channels=target_dim,
-            out_channels=target_dim,
-            diffusion_step_embed_dim=diffusion_step_embed_dim,
-            down_dims=down_dims,
-            cond_dim=cond_dim  # Only the actual condition dimension
-        )
+        assert model_type in ['unet', 'transformer'], "model_type must be either 'unet' or 'transformer'"
+        if model_type == 'unet':
+            self.model = ConditionalUNet1D(
+                in_channels=target_dim,
+                out_channels=target_dim,
+                diffusion_step_embed_dim=diffusion_step_embed_dim,
+                down_dims=down_dims,
+                cond_dim=cond_dim  # Only the actual condition dimension
+            )
+        elif model_type == 'transformer':   
+            self.model = DiT_S(
+                in_dim=target_dim,
+                out_dim=target_dim,
+                cond_dim=cond_dim,
+            )
         
         # Source distribution sampler function. Defaults to gaussian
         if source_sampler is None:
@@ -69,7 +77,7 @@ class ConditionalFlowModel(nn.Module):
         )  # (batch_size, target_dim)
         
         x_t = (1 - t) * source + t * target  # (batch_size, target_dim)
-        pred_velocity = self.unet(x_t, cond_input, t)  # (batch_size, target_dim)
+        pred_velocity = self.model(x_t, cond_input, t)  # (batch_size, target_dim)
         true_velocity = target - source  # (batch_size, target_dim)
         loss = F.mse_loss(pred_velocity, true_velocity)
         
@@ -77,7 +85,7 @@ class ConditionalFlowModel(nn.Module):
     
     def to(self, device):
         super().to(device)
-        self.unet.to(device)
+        self.model.to(device)
         return self
     
     def predict(self, batch_size, condition=None, prior_samples=None, prior_sampler=None, num_steps=100, device='cuda'):
@@ -108,7 +116,7 @@ class ConditionalFlowModel(nn.Module):
             dt = 1.0 / num_steps
             for step in range(num_steps):
                 t = torch.full((batch_size, 1), step * dt, device=device)  # (batch_size, 1)
-                velocity = self.unet(x, cond_input, t)  # (batch_size, target_dim)
+                velocity = self.model(x, cond_input, t)  # (batch_size, target_dim)
                 x = x + velocity * dt
             
             return x
@@ -144,7 +152,7 @@ class ConditionalFlowModel(nn.Module):
 
             for step in range(num_steps):
                 t = torch.full((batch_size, 1), step * dt, device=device)  # (batch_size, 1)
-                velocity = self.unet(x_t, cond_input, t)
+                velocity = self.model(x_t, cond_input, t)
                 dx = velocity * dt
                 x_t += dx
                 integrated_path_length += torch.norm(dx, dim=-1)
@@ -206,7 +214,7 @@ class LatentBridgeModel(ConditionalFlowModel):
                 cond_input = torch.zeros(batch_size, self.cond_dim, device=device)
         
         # Predict velocity field
-        pred_velocity = self.unet(x_t, cond_input, t)  # (batch_size, target_dim)
+        pred_velocity = self.model(x_t, cond_input, t)  # (batch_size, target_dim)
         
         # Compute loss (MSE between predicted and true velocity)
         loss = F.mse_loss(pred_velocity, true_velocity)
@@ -215,7 +223,7 @@ class LatentBridgeModel(ConditionalFlowModel):
     
     def to(self, device):
         super().to(device)
-        self.unet.to(device)
+        self.model.to(device)
         return self
     
     def predict(self, batch_size, condition=None, prior_samples=None, prior_sampler=None, num_steps=100, device='cpu'):
@@ -251,7 +259,7 @@ class LatentBridgeModel(ConditionalFlowModel):
                         cond_input = torch.zeros(batch_size, self.cond_dim, device=device)
                 
                 # Predict velocity
-                velocity = self.unet(x, cond_input, t)  # (batch_size, target_dim)
+                velocity = self.model(x, cond_input, t)  # (batch_size, target_dim)
                 
                 # Euler integration step
                 x = x + velocity * dt
@@ -275,14 +283,16 @@ class EquilibriumMatchingModel(ConditionalFlowModel):
             g = .0001,
             objective_type='implicit',
             energy_type='dot',
-            grad_type='nag'
+            grad_type='nag',
+            model_type='transformer'
         ):
         super(EquilibriumMatchingModel, self).__init__(
             target_dim=target_dim,
             cond_dim=cond_dim,
             diffusion_step_embed_dim=diffusion_step_embed_dim,
             down_dims=down_dims,
-            source_sampler=source_sampler
+            source_sampler=source_sampler,
+            model_type=model_type
         )
         assert gamma_type in ['linear', 'truncated'], "gamma_type must be either 'linear' or 'truncated'"
         self.gamma_type = gamma_type
@@ -332,7 +342,7 @@ class EquilibriumMatchingModel(ConditionalFlowModel):
         xg = (1 - gamma) * eps + gamma * x  # (batch_size, target_dim)
         c_gamma = self.c_trunc(gamma) if self.gamma_type == 'truncated' else self.c_linear(gamma)
         t_mask = torch.zeros_like(gamma) # paper masks 
-        pred = self.unet(xg, cond_input, t_mask)  # (batch_size, target_dim)
+        pred = self.model(xg, cond_input, t_mask)  # (batch_size, target_dim)
         loss = self.objective(x, pred, eps, c_gamma)
         batch_loss = loss.mean()        
 
@@ -418,7 +428,7 @@ class EquilibriumMatchingModel(ConditionalFlowModel):
     def sample_nag(self, x, cond_input, num_steps, device):
         batch_size = x.shape[0]
         t_mask = torch.zeros(batch_size, 1, device=device)
-        grad = self.unet(x, cond_input, t_mask)  # (batch_size, target_dim)
+        grad = self.model(x, cond_input, t_mask)  # (batch_size, target_dim)
         for i in range(num_steps):
             grad_norm = torch.norm(grad, dim=1, keepdim=True) 
             if torch.all(grad_norm < self.g):
@@ -428,14 +438,14 @@ class EquilibriumMatchingModel(ConditionalFlowModel):
             x_last = x.clone()
             x = x - self.eta * grad
             nag_point = x + self.mu * (x - x_last)
-            grad = self.unet(nag_point, cond_input, t_mask)  # (batch_size, target_dim)
+            grad = self.model(nag_point, cond_input, t_mask)  # (batch_size, target_dim)
         return x
 
     def sample_gd(self, x, cond_input, num_steps, device):
         batch_size = x.shape[0]
         t_mask = torch.zeros(batch_size, 1, device=device)
-        grad = self.unet(x, cond_input, t_mask)  # (batch_size, target_dim)
+        grad = self.model(x, cond_input, t_mask)  # (batch_size, target_dim)
         for i in range(num_steps):
             x = x - self.eta * grad
-            grad = self.unet(x, cond_input, t_mask)  # (batch_size, target_dim)
+            grad = self.model(x, cond_input, t_mask)  # (batch_size, target_dim)
         return x

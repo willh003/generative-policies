@@ -7,7 +7,8 @@ import math
 
 from .flow_model import ConditionalFlowModel, LatentBridgeModel, EquilibriumMatchingModel
 from .train import train_flow_model, evaluate_flow_model
-
+from cluster_utils import set_cluster_graphics_vars
+set_cluster_graphics_vars()
 def gaussian_sampler(target_dim, mean=0.0, std=1.0):
     """Create a Gaussian source sampler function"""
     def sampler(batch_size, device):
@@ -594,7 +595,8 @@ def run_experiment(model_type='fm', epochs=100, batch_size=256, learning_rate=1e
         flow_model = ConditionalFlowModel(
         target_dim=target_dim,
         cond_dim=0,  # No additional conditioning
-        source_sampler=gaussian_sampler(target_dim)  # Default Gaussian source
+        source_sampler=gaussian_sampler(target_dim),  # Default Gaussian source
+        model_type='transformer'
         )
     elif model_type == 'eqm':
 
@@ -608,6 +610,7 @@ def run_experiment(model_type='fm', epochs=100, batch_size=256, learning_rate=1e
             energy_type='dot',
             grad_type='nag',
             eta=0.02,
+            model_type='transformer'
         )
     
     print(f"Model parameters: {sum(p.numel() for p in flow_model.parameters()):,}")
@@ -2287,7 +2290,7 @@ def run_action_chunk_steering_experiment():
 if __name__ == "__main__":
     # #### EXPERIMENT OPTIONS
     #run_experiment(model_type='fm', epochs=100)
-    run_experiment(model_type='eqm', epochs=1000, n_samples=50000)
+    run_experiment(model_type='eqm', epochs=100)
     # run_single_model_inference_experiment()
     # run_action_chunk_steering_experiment()
 
