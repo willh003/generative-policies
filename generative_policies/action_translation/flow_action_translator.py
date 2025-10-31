@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 
 from generative_policies.models.flow_model import ConditionalFlowModel
-from generative_policies.models.obs_encoder import IdentityEncoder, IdentityTwoInputEncoder
+from generative_policies.models.obs_encoder import IdentityEncoder, IdentityTwoInputEncoder, ImageEncoder, ImageStateEncoder
 from generative_policies.models.prior import GaussianPrior
 
 from generative_policies.action_translation.interface import ActionTranslatorInterface
@@ -79,6 +79,32 @@ class FlowActionPriorTranslator(ActionTranslatorInterface):
         
         return integrated_path_length, straight_path_length, final_sample.cpu().numpy()
 
+class FlowImageActionPriorTranslator(FlowActionPriorTranslator):
+    def __init__(self, action_dim, image_dim, diffusion_step_embed_dim=16, down_dims=[16, 32, 64], num_inference_steps=100, device='cuda', model_type='unet', use_spectral_norm=False):
+        
+        super(FlowImageActionPriorTranslator, self).__init__(action_dim, image_dim, diffusion_step_embed_dim, down_dims, num_inference_steps, device, model_type, use_spectral_norm)
+        
+        self.obs_encoder = ImageEncoder(image_dim, device=device)
+        self.flow_model = ConditionalFlowModel(target_dim=action_dim, 
+                                               cond_dim=self.obs_encoder.output_dim, 
+                                               diffusion_step_embed_dim=diffusion_step_embed_dim,
+                                               down_dims=down_dims,
+                                               model_type=model_type,
+                                               use_spectral_norm=use_spectral_norm)
+        self.to(device)
+
+class FlowImageStateActionPriorTranslator(FlowActionPriorTranslator):
+    def __init__(self, action_dim, image_dim, state_dim, diffusion_step_embed_dim=16, down_dims=[16, 32, 64], num_inference_steps=100, device='cuda', model_type='unet', use_spectral_norm=False):
+        super(FlowImageStateActionPriorTranslator, self).__init__(action_dim, state_dim, diffusion_step_embed_dim, down_dims, num_inference_steps, device, model_type, use_spectral_norm)
+        
+        self.obs_encoder = ImageStateEncoder(image_dim, state_dim, device=device) # image_dim + state_dim -> obs_dim
+        self.flow_model = ConditionalFlowModel(target_dim=action_dim, 
+                                               cond_dim=self.obs_encoder.output_dim, 
+                                               diffusion_step_embed_dim=diffusion_step_embed_dim,
+                                               down_dims=down_dims,
+                                               model_type=model_type,
+                                               use_spectral_norm=use_spectral_norm)
+        self.to(device)
 
 
 class FlowActionConditionedTranslator(ActionTranslatorInterface):
